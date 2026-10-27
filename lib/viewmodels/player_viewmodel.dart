@@ -8,10 +8,13 @@ import 'package:window_manager/window_manager.dart';
 import '../models/track.dart';
 import '../models/playlist.dart';
 import '../models/download_item.dart';
+import '../models/library_sort_mode.dart';
 import '../services/audio_player_service.dart';
 import '../services/file_picker_service.dart';
 import '../services/online_music_service.dart';
 import '../services/storage_service.dart';
+
+export '../models/library_sort_mode.dart';
 
 class PlayerViewModel extends ChangeNotifier {
   final AudioPlayerService _audioPlayerService = AudioPlayerService();
@@ -666,6 +669,22 @@ class PlayerViewModel extends ChangeNotifier {
     }
   }
 
+  Future<void> pause() async {
+    if (_isPlaying) {
+      await _audioPlayerService.pause();
+    }
+  }
+
+  Future<void> resume() async {
+    if (!_isPlaying && _currentTrack != null) {
+      if (_audioPlayerService.state == PlayerState.stopped || _audioPlayerService.state == PlayerState.completed) {
+        await playTrack(_currentTrack!);
+      } else {
+        await _audioPlayerService.resume();
+      }
+    }
+  }
+
   Future<void> next() async {
     if (_queue.isEmpty) return;
 
@@ -839,12 +858,13 @@ class PlayerViewModel extends ChangeNotifier {
 
   // --- Sleep Timer Controls ---
 
-  void setSleepTimer(Duration? duration, {bool afterCurrentTrack = false}) {
+  void setSleepTimer(Duration? duration, {bool afterCurrentTrack = false, bool stopAfterCurrent = false}) {
     _sleepTimer?.cancel();
     _sleepTimer = null;
-    _stopAfterCurrentTrack = afterCurrentTrack;
+    final stopAfter = afterCurrentTrack || stopAfterCurrent;
+    _stopAfterCurrentTrack = stopAfter;
 
-    if (duration == null || afterCurrentTrack) {
+    if (duration == null || stopAfter) {
       _sleepTimerRemaining = null;
       notifyListeners();
       return;
@@ -1073,6 +1093,56 @@ class PlayerViewModel extends ChangeNotifier {
     _localTracks.removeWhere((t) => t.id == track.id);
     await _storageService.saveLocalTracks(_localTracks);
     notifyListeners();
+  }
+
+  // --- Search & Library Filtering / Sorting ---
+
+  String _searchQuery = '';
+  String get searchQuery => _searchQuery;
+
+  void setSearchQuery(String query) {
+    _searchQuery = query;
+    notifyListeners();
+  }
+
+  void clearSearchQuery() {
+    _searchQuery = '';
+    notifyListeners();
+  }
+
+  List<Track> filterTracks(List<Track> source, [String? query]) {
+    final q = (query ?? _searchQuery).trim().toLowerCase();
+    if (q.isEmpty) return List<Track>.from(source);
+    return source.where((track) {
+      return track.title.toLowerCase().contains(q) ||
+          track.artist.toLowerCase().contains(q) ||
+          (track.album?.toLowerCase().contains(q) ?? false);
+    }).toList();
+  }
+
+  List<Track> sortTracks(List<Track> source, LibrarySortMode mode) {
+    final list = List<Track>.from(source);
+    switch (mode) {
+      case LibrarySortMode.addedNewest:
+        list.sort((a, b) => b.addedAt.compareTo(a.addedAt));
+        break;
+      case LibrarySortMode.titleAsc:
+        list.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+        break;
+      case LibrarySortMode.titleDesc:
+        list.sort((a, b) => b.title.toLowerCase().compareTo(a.title.toLowerCase()));
+        break;
+      case LibrarySortMode.artistAsc:
+        list.sort((a, b) => a.artist.toLowerCase().compareTo(b.artist.toLowerCase()));
+        break;
+      case LibrarySortMode.mostPlayed:
+        list.sort((a, b) => b.playCount.compareTo(a.playCount));
+        break;
+      case LibrarySortMode.durationDesc:
+        list.sort((a, b) => b.duration.compareTo(a.duration));
+        break;
+    }
+    return list;
   }
 
   // --- YouTube Playlist Downloader ---
@@ -1365,7 +1435,9 @@ class PlayerViewModel extends ChangeNotifier {
   }
 
   Future<void> addTrackToPlaylist(String playlistId, Track track) async {
-    final playlist = _playlists.firstWhere((p) => p.id == playlistId);
+    final idx = _playlists.indexWhere((p) => p.id == playlistId);
+    if (idx == -1) return;
+    final playlist = _playlists[idx];
     if (!playlist.tracks.any((t) => t.id == track.id)) {
       playlist.tracks.add(track);
       await _storageService.savePlaylists(_playlists);
@@ -1374,7 +1446,9 @@ class PlayerViewModel extends ChangeNotifier {
   }
 
   Future<void> removeTrackFromPlaylist(String playlistId, Track track) async {
-    final playlist = _playlists.firstWhere((p) => p.id == playlistId);
+    final idx = _playlists.indexWhere((p) => p.id == playlistId);
+    if (idx == -1) return;
+    final playlist = _playlists[idx];
     playlist.tracks.removeWhere((t) => t.id == track.id);
     await _storageService.savePlaylists(_playlists);
     notifyListeners();

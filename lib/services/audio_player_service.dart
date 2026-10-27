@@ -78,17 +78,19 @@ class AudioPlayerService {
 
   bool get _hasActiveEqFilter => _eqEnabled && _eqBands.any((g) => g.abs() >= 0.1);
 
-  String? _buildFfmpegEqFilter() {
-    if (!_hasActiveEqFilter) return null;
-    final maxBoost = _eqBands.reduce((a, b) => a > b ? a : b);
+  String? _buildFfmpegEqFilter() => buildFfmpegEqFilterString(_eqEnabled, _eqBands);
+
+  static String? buildFfmpegEqFilterString(bool enabled, List<double> bands) {
+    if (!enabled || !bands.any((g) => g.abs() >= 0.1)) return null;
+    final maxBoost = bands.reduce((a, b) => a > b ? a : b);
     final preampDb = maxBoost > 2.0 ? -(maxBoost * 0.55).clamp(0.0, 6.0) : 0.0;
     final List<String> filters = [];
     if (preampDb != 0.0) {
       filters.add('volume=${preampDb.toStringAsFixed(1)}dB');
     }
-    for (int i = 0; i < 5 && i < _eqBands.length; i++) {
-      if (_eqBands[i].abs() >= 0.1) {
-        final gain = _eqBands[i].clamp(-12.0, 12.0).toStringAsFixed(1);
+    for (int i = 0; i < 5 && i < bands.length; i++) {
+      if (bands[i].abs() >= 0.1) {
+        final gain = bands[i].clamp(-12.0, 12.0).toStringAsFixed(1);
         filters.add('equalizer=f=${eqFrequencies[i].toInt()}:width_type=o:width=1.8:g=$gain');
       }
     }

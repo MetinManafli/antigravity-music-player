@@ -559,7 +559,7 @@ class _SettingsViewState extends State<SettingsView> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: SelectableText(
-                            vm.customDownloadDir,
+                            vm.customDownloadDir.isNotEmpty ? vm.customDownloadDir : vm.defaultDownloadDirectory,
                             style: const TextStyle(
                               color: AppTheme.textPrimary,
                               fontSize: 13,

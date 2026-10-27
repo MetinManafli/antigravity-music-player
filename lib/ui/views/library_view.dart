@@ -7,15 +7,6 @@ import '../theme/app_theme.dart';
 import '../widgets/track_list_item.dart';
 import '../widgets/import_to_playlist_dialog.dart';
 
-enum LibrarySortMode {
-  addedNewest,
-  titleAsc,
-  titleDesc,
-  artistAsc,
-  mostPlayed,
-  durationDesc,
-}
-
 enum LibraryTabMode {
   allTracks,
   artists,

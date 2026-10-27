@@ -129,21 +129,100 @@ class FilePickerService {
     return name.trim().isEmpty ? fileName : name.trim();
   }
 
+  /// Build raw .m3u8 playlist text content
+  static String buildM3UContent(Playlist playlist) {
+    final buffer = StringBuffer();
+    buffer.writeln('#EXTM3U');
+    buffer.writeln('#PLAYLIST:${playlist.name}');
+    for (final t in playlist.tracks) {
+      final sec = t.duration.inSeconds > 0 ? t.duration.inSeconds : -1;
+      buffer.writeln('#EXTINF:$sec,${t.artist} - ${t.title}');
+      buffer.writeln(t.sourcePath);
+    }
+    return buffer.toString();
+  }
+
+  /// Parse .m3u or .m3u8 playlist content
+  static Playlist parseM3UContent({
+    required String content,
+    required String defaultName,
+    String? baseDir,
+  }) {
+    final lines = const LineSplitter().convert(content);
+    String playlistName = Track.fixMojibake(defaultName);
+    final List<Track> tracks = [];
+
+    String? pendingTitle;
+    String? pendingArtist;
+    Duration pendingDuration = Duration.zero;
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+
+      if (line.startsWith('#PLAYLIST:')) {
+        final plTitle = line.substring('#PLAYLIST:'.length).trim();
+        if (plTitle.isNotEmpty) {
+          playlistName = Track.fixMojibake(plTitle);
+        }
+      } else if (line.startsWith('#EXTINF:')) {
+        final info = line.substring('#EXTINF:'.length);
+        final commaIdx = info.indexOf(',');
+        if (commaIdx != -1) {
+          final secStr = info.substring(0, commaIdx).trim();
+          final sec = int.tryParse(secStr) ?? 0;
+          if (sec > 0) pendingDuration = Duration(seconds: sec);
+
+          final display = Track.fixMojibake(info.substring(commaIdx + 1).trim());
+          final dashIdx = display.indexOf(' - ');
+          if (dashIdx != -1) {
+            pendingArtist = display.substring(0, dashIdx).trim();
+            pendingTitle = display.substring(dashIdx + 3).trim();
+          } else {
+            pendingTitle = display;
+          }
+        }
+      } else if (!line.startsWith('#')) {
+        String resolvedPath = line;
+        final isOnline = line.startsWith('http://') || line.startsWith('https://');
+        if (!isOnline && !p.isAbsolute(line) && baseDir != null) {
+          resolvedPath = p.normalize(p.join(baseDir, line));
+        }
+
+        final fileName = p.basename(resolvedPath);
+        final title = pendingTitle ?? Track.fixMojibake(_cleanTitle(fileName));
+        final artist = pendingArtist ?? (isOnline ? 'Online' : 'Yerel Sanatçı');
+
+        tracks.add(Track(
+          id: 'm3u_${resolvedPath.hashCode}_${tracks.length}',
+          title: title,
+          artist: artist,
+          album: playlistName,
+          duration: pendingDuration,
+          sourcePath: resolvedPath,
+          isOnline: isOnline,
+        ));
+
+        pendingTitle = null;
+        pendingArtist = null;
+        pendingDuration = Duration.zero;
+      }
+    }
+
+    return Playlist(
+      id: 'pl_${DateTime.now().millisecondsSinceEpoch}',
+      name: playlistName,
+      tracks: tracks,
+    );
+  }
+
   /// Export a playlist to an .m3u8 file
   Future<String?> exportPlaylistToM3U(Playlist playlist) async {
     if (kIsWeb) return null;
     try {
       final safeName = playlist.name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
-      final buffer = StringBuffer();
-      buffer.writeln('#EXTM3U');
-      buffer.writeln('#PLAYLIST:${playlist.name}');
-      for (final t in playlist.tracks) {
-        final sec = t.duration.inSeconds > 0 ? t.duration.inSeconds : -1;
-        buffer.writeln('#EXTINF:$sec,${t.artist} - ${t.title}');
-        buffer.writeln(t.sourcePath);
-      }
-
-      final encodedBytes = Uint8List.fromList(utf8.encode(buffer.toString()));
+      final content = buildM3UContent(playlist);
+      final encodedBytes = Uint8List.fromList(utf8.encode(content));
       final outputUri = await FilePicker.saveFile(
         dialogTitle: 'Çalma Listesini Dışa Aktar (.m3u8)',
         fileName: '$safeName.m3u8',
@@ -184,73 +263,13 @@ class FilePickerService {
       if (!await file.exists()) return null;
 
       final content = await file.readAsString(encoding: utf8);
-      final lines = const LineSplitter().convert(content);
       final baseDir = p.dirname(filePath);
+      final defaultName = _cleanTitle(picked.name);
 
-      String playlistName = Track.fixMojibake(_cleanTitle(picked.name));
-      final List<Track> tracks = [];
-
-      String? pendingTitle;
-      String? pendingArtist;
-      Duration pendingDuration = Duration.zero;
-
-      for (final rawLine in lines) {
-        final line = rawLine.trim();
-        if (line.isEmpty) continue;
-
-        if (line.startsWith('#PLAYLIST:')) {
-          final plTitle = line.substring('#PLAYLIST:'.length).trim();
-          if (plTitle.isNotEmpty) {
-            playlistName = Track.fixMojibake(plTitle);
-          }
-        } else if (line.startsWith('#EXTINF:')) {
-          final info = line.substring('#EXTINF:'.length);
-          final commaIdx = info.indexOf(',');
-          if (commaIdx != -1) {
-            final secStr = info.substring(0, commaIdx).trim();
-            final sec = int.tryParse(secStr) ?? 0;
-            if (sec > 0) pendingDuration = Duration(seconds: sec);
-
-            final display = Track.fixMojibake(info.substring(commaIdx + 1).trim());
-            final dashIdx = display.indexOf(' - ');
-            if (dashIdx != -1) {
-              pendingArtist = display.substring(0, dashIdx).trim();
-              pendingTitle = display.substring(dashIdx + 3).trim();
-            } else {
-              pendingTitle = display;
-            }
-          }
-        } else if (!line.startsWith('#')) {
-          String resolvedPath = line;
-          final isOnline = line.startsWith('http://') || line.startsWith('https://');
-          if (!isOnline && !p.isAbsolute(line)) {
-            resolvedPath = p.normalize(p.join(baseDir, line));
-          }
-
-          final fileName = p.basename(resolvedPath);
-          final title = pendingTitle ?? Track.fixMojibake(_cleanTitle(fileName));
-          final artist = pendingArtist ?? (isOnline ? 'Online' : 'Yerel Sanatçı');
-
-          tracks.add(Track(
-            id: 'm3u_${resolvedPath.hashCode}_${tracks.length}',
-            title: title,
-            artist: artist,
-            album: playlistName,
-            duration: pendingDuration,
-            sourcePath: resolvedPath,
-            isOnline: isOnline,
-          ));
-
-          pendingTitle = null;
-          pendingArtist = null;
-          pendingDuration = Duration.zero;
-        }
-      }
-
-      return Playlist(
-        id: 'pl_${DateTime.now().millisecondsSinceEpoch}',
-        name: playlistName,
-        tracks: tracks,
+      return parseM3UContent(
+        content: content,
+        defaultName: defaultName,
+        baseDir: baseDir,
       );
     } catch (e) {
       debugPrint('Error importing M3U: $e');
